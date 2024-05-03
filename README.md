@@ -177,7 +177,7 @@ yuku_run --download_gruplac_production 33dq-ab5a
 
 The gruplac download dont supports checkpoints, but it support pagination, the cache is saved in the collection gruplac_data_cache, but it is eventually removed if the execution fails.  This run takes about 1 hour.
 `
-yuku_run --download_gruplac_production 33dq-ab5a
+yuku_run --download_gruplac_groups 33dq-ab5a
 `
 
 # Yuku Results

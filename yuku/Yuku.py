@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 import time
 import urllib3
 import sys
+from io import StringIO
 
 
 class Yuku:
@@ -45,17 +46,16 @@ class Yuku:
             return True
         return False
 
-    def download_cvlac(self, dataset_id: str, use_raw: bool = False):
+    def download_cvlac_data(self, dataset_id: str):
         """
         Method to download cvlav information.
-        This can take long time, but if something goes wrong we support checkpoint.
+        Unfortunately we dont have support for checkpoint in this method.
 
         Parameters:
         ------------
         dataset_id:str
             id for dataset in socrata ex: bqtm-4y2h
         """
-        scienti_url = 'https://scienti.minciencias.gov.co/cvlac/visualizador/generarCurriculoCv.do?cod_rh='
         if "cvlac_dataset_info" in self.db.list_collection_names():
             print("WARNING: cvlac_dataset_info already in the database, it wont be downloaded again, drop the database if you want start over.")
         else:
@@ -69,7 +69,29 @@ class Yuku:
             data = list(data)
             self.db["cvlac_data"].insert_many(data)
 
-        cod_rh_data = self.db["cvlac_data"].distinct("id_persona_pr")
+    def download_cvlac_profile(self, use_raw: bool = False):
+        """
+        Method to download cvlav profile information.
+        This can take long time, but if something goes wrong we support checkpoint.
+
+        Parameters:
+        ------------
+        use_raw:bool
+            process data from raw html collection (previously dowloaded), default False
+        """
+        scienti_url = 'https://scienti.minciencias.gov.co/cvlac/visualizador/generarCurriculoCv.do?cod_rh='
+        if "gruplac_production_data" not in self.db.list_collection_names():
+            print("ERROR: gruplac_production_data not in the database, please download gruplac_production_data first https://github.com/colav/Yuku?tab=readme-ov-file#download-gruplac-groups-data")
+
+        if "cvlac_data" not in self.db.list_collection_names():
+            print("ERROR: cvlac_data not in the database, please download cvlac_data frist https://github.com/colav/yuku?tab=readme-ov-file#download-cvlac-data")
+            return
+        cod_rh_data_grup = self.db["gruplac_production_data"].distinct(
+            "id_persona_pd")  # taking cod_rh from gruplac
+        cod_rh_data_cvlac = self.db["cvlac_data"].distinct(
+            "id_persona_pr")  # taking cod_rh from cvlac
+        cod_rh_data = set(cod_rh_data_grup).union(set(cod_rh_data_cvlac))
+        cod_rh_data = list(cod_rh_data)
         cod_rh_stage = self.db["cvlac_stage"].distinct("id_persona_pr")
         cod_rh_stage_priv = self.db["cvlac_stage_private"].distinct(
             "id_persona_pr")
@@ -80,7 +102,7 @@ class Yuku:
         cod_rh = set(cod_rh_data) - set(cod_rh_stage) - \
             set(cod_rh_stage_priv) - set(cod_rh_stage_empty)
         cod_rh = list(cod_rh)
-        print(f"INFO: found {len(cod_rh_data)} records in data\n      found {len(cod_rh_stage)} in stage\n      found {len(cod_rh)} remain records to download.")
+        print(f"INFO: found {len(cod_rh_data)} records in cvlac_data and gruplac_production_data and \n      found {len(cod_rh_stage)} in stage\n      found {len(cod_rh)} remain records to download.")
 
         counter = 0
         count = len(cod_rh)
@@ -134,14 +156,14 @@ class Yuku:
                             f"WARNING: found empty id {cvlac}  with url = {url} ")
                         self.db["cvlac_stage_empty"].insert_one(reg)
                         continue
-                    record['datos_generales'] = pd.read_html(table_tag.decode())[
+                    record['datos_generales'] = pd.read_html(StringIO(table_tag.decode()))[
                         0].to_dict(orient='records')
             except Exception as e:
                 print(f"Error processing id {cvlac}  with url = {url} ")
                 print("=" * 20)
                 print(html)
                 print("=" * 20)
-                print(e, file=sys.stderr)
+                print(e)
                 self.db["cvlac_stage_error"].insert_one(
                     {"url": url, "id_persona_pr": cvlac, "status_code": r.status_code, "html": html, "exception": str(e)})
                 continue
@@ -151,7 +173,7 @@ class Yuku:
             reg['datos_generales'] = {}
             reg['datos_generales']['Nombre'] = ''
 
-            record = pd.read_html(table_tag.decode())[
+            record = pd.read_html(StringIO(table_tag.decode()))[
                 0].to_dict(orient='records')
 
             for d in record:
@@ -178,7 +200,7 @@ class Yuku:
                 continue
             try:
                 # Redes
-                a_tag = soup.find('a', {'name': 'redes_identificadoes'}).parent
+                a_tag = soup.find('a', {'name': 'redes_identificadores'}).parent
                 table_tag = a_tag.find('table')
                 reg['redes_identificadoes'] = {}
 

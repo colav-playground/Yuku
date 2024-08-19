@@ -69,50 +69,16 @@ class Yuku:
             data = list(data)
             self.db["cvlac_data"].insert_many(data)
 
-    def download_cvlac_profile(self, use_raw: bool = False):
-        """
-        Method to download cvlav profile information.
-        This can take long time, but if something goes wrong we support checkpoint.
-
-        Parameters:
-        ------------
-        use_raw:bool
-            process data from raw html collection (previously dowloaded), default False
-        """
-        scienti_url = 'https://scienti.minciencias.gov.co/cvlac/visualizador/generarCurriculoCv.do?cod_rh='
-        if "gruplac_production_data" not in self.db.list_collection_names():
-            print("ERROR: gruplac_production_data not in the database, please download gruplac_production_data first https://github.com/colav/Yuku?tab=readme-ov-file#download-gruplac-groups-data")
-
-        if "cvlac_data" not in self.db.list_collection_names():
-            print("ERROR: cvlac_data not in the database, please download cvlac_data frist https://github.com/colav/yuku?tab=readme-ov-file#download-cvlac-data")
-            return
-        cod_rh_data_grup = self.db["gruplac_production_data"].distinct(
-            "id_persona_pd")  # taking cod_rh from gruplac
-        cod_rh_data_cvlac = self.db["cvlac_data"].distinct(
-            "id_persona_pr")  # taking cod_rh from cvlac
-        cod_rh_data = set(cod_rh_data_grup).union(set(cod_rh_data_cvlac))
-        cod_rh_data = list(cod_rh_data)
-        cod_rh_stage = self.db["cvlac_stage"].distinct("id_persona_pr")
-        cod_rh_stage_priv = self.db["cvlac_stage_private"].distinct(
-            "id_persona_pr")
-        cod_rh_stage_empty = self.db["cvlac_stage_empty"].distinct(
-            "id_persona_pr")
-
-        # computing the remaining ids for scrapping
-        cod_rh = set(cod_rh_data) - set(cod_rh_stage) - \
-            set(cod_rh_stage_priv) - set(cod_rh_stage_empty)
-        cod_rh = list(cod_rh)
-        print(f"INFO: found {len(cod_rh_data)} records in cvlac_data and gruplac_production_data and \n      found {len(cod_rh_stage)} in stage\n      found {len(cod_rh)} remain records to download.")
-
-        counter = 0
-        count = len(cod_rh)
-        for cvlac in cod_rh:
+    def process_cvlac_profile(self, cvlac, scienti_url, counter, count, use_raw, max_tries=1):
+        for t in range(max_tries):
+            url = f'{scienti_url}{cvlac}'
+            if t > 0:
+                print(f"INFO: retrying {t} {url} ")
             if counter % 10 == 0:
                 if use_raw:
                     print(f"INFO: Parsed {counter} of {count} from raw")
                 else:
                     print(f"INFO: Downloaded {counter} of {count}")
-            url = f'{scienti_url}{cvlac}'
             if use_raw:
                 r = self.db["cvlac_stage_raw"].find_one({"_id": cvlac})
                 if r is None:
@@ -191,6 +157,7 @@ class Yuku:
                         {"_id": cvlac, "html": html})
                     time.sleep(self.delay)
                     counter += 1
+                    return True
                     continue
             except Exception as e:
                 print(f"Error processing id {cvlac}  with url = {url} ")
@@ -200,14 +167,15 @@ class Yuku:
                 continue
             try:
                 # Redes
-                a_tag = soup.find('a', {'name': 'redes_identificadores'}).parent
+                a_tag = soup.find(
+                    'a', {'name': 'redes_identificadores'}).parent
                 table_tag = a_tag.find('table')
-                reg['redes_identificadoes'] = {}
+                reg['redes_identificadores'] = {}
 
                 if table_tag is not None:
                     record = table_tag.find_all('a')
                     for link in record:
-                        reg['redes_identificadoes'][link.text] = link['href']
+                        reg['redes_identificadores'][link.text] = link['href']
 
                 # Identificadores
                 a_tag = soup.find('a', {'name': 'red_identificadores'}).parent
@@ -273,9 +241,53 @@ class Yuku:
                 else:
                     self.db["cvlac_stage_error"].insert_one(
                         {"url": url, "id_persona_pr": cvlac, "status_code": r.status_code, "html": html, "exception": str(e)})
+                return False
             if use_raw is False:
                 time.sleep(self.delay)
-            counter += 1
+            return True
+
+        return False  # if max_tries is reached then it fails
+
+    def download_cvlac_profile(self, use_raw: bool = False, max_tries: int = 1):
+        """
+        Method to download cvlav profile information.
+        This can take long time, but if something goes wrong we support checkpoint.
+
+        Parameters:
+        ------------
+        use_raw:bool
+            process data from raw html collection (previously dowloaded), default False
+        """
+        scienti_url = 'https://scienti.minciencias.gov.co/cvlac/visualizador/generarCurriculoCv.do?cod_rh='
+        if "gruplac_production_data" not in self.db.list_collection_names():
+            print("ERROR: gruplac_production_data not in the database, please download gruplac_production_data first https://github.com/colav/Yuku?tab=readme-ov-file#download-gruplac-groups-data")
+
+        if "cvlac_data" not in self.db.list_collection_names():
+            print("ERROR: cvlac_data not in the database, please download cvlac_data frist https://github.com/colav/yuku?tab=readme-ov-file#download-cvlac-data")
+            return
+        cod_rh_data_grup = self.db["gruplac_production_data"].distinct(
+            "id_persona_pd")  # taking cod_rh from gruplac
+        cod_rh_data_cvlac = self.db["cvlac_data"].distinct(
+            "id_persona_pr")  # taking cod_rh from cvlac
+        cod_rh_data = set(cod_rh_data_grup).union(set(cod_rh_data_cvlac))
+        cod_rh_data = list(cod_rh_data)
+        cod_rh_stage = self.db["cvlac_stage"].distinct("id_persona_pr")
+        cod_rh_stage_priv = self.db["cvlac_stage_private"].distinct(
+            "id_persona_pr")
+        cod_rh_stage_empty = self.db["cvlac_stage_empty"].distinct(
+            "id_persona_pr")
+
+        # computing the remaining ids for scrapping
+        cod_rh = set(cod_rh_data) - set(cod_rh_stage) - \
+            set(cod_rh_stage_priv) - set(cod_rh_stage_empty)
+        cod_rh = list(cod_rh)
+        print(f"INFO: found {len(cod_rh_data)} records in cvlac_data and gruplac_production_data and \n      found {len(cod_rh_stage)} in stage\n      found {len(cod_rh)} remain records to download.")
+
+        counter = 0
+        count = len(cod_rh)
+        for cvlac in cod_rh:
+            if self.process_cvlac_profile(cvlac, scienti_url, counter, count, use_raw, max_tries):
+                counter += 1
         print(f"INFO: Downloaded {counter} of {count}")
 
     def download_gruplac_production(self, dataset_id: str):

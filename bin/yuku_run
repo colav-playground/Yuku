@@ -26,6 +26,8 @@ parser.add_argument('--download_cvlac_profiles', action='store_true',
                     help='Download cvlac profiles taking ids from gruplac_production_data collection and perform scrapping from public profiles in mincienias')
 parser.add_argument('--download_cvlac_profiles_use_raw', action="store_true",
                     help='parse cvlac profiles taking html already downloaded')
+parser.add_argument('--download_cvlac_profiles_max_tries', type=int, default=2,
+                    help='max tries to download profiles in the scrapping process')
 parser.add_argument('--download_gruplac_production', type=str,
                     help='Download gruplac production data for given dataset id')
 parser.add_argument('--download_gruplac_groups', type=str,
@@ -36,7 +38,6 @@ parser.add_argument('--download_collection', type=str,
                     help='Collection name to --download')
 parser.add_argument('--delay', type=float, default=0.3,
                     help='delay between requests, default 0.3 seconds')
-parser.add_argument('--raw', action='store_true')
 
 if __name__ == '__main__':
     args = parser.parse_args()
@@ -49,7 +50,7 @@ if __name__ == '__main__':
         yuku.search(args.search, args.search_limit)
 
     if args.download_cvlac is not None:
-        yuku.download_cvlac(args.download_cvlac, args.raw)
+        yuku.download_cvlac_data(args.download_cvlac)
 
     if args.download_gruplac_production is not None:
         yuku.download_gruplac_production(args.download_gruplac_production)
@@ -58,8 +59,7 @@ if __name__ == '__main__':
         yuku.download_gruplac_groups(args.download_gruplac_groups)
 
     if args.download_cvlac_profiles is not None:
-
-        yuku.download_cvlac_profile(args.download_cvlac_profiles_use_raw)
+        yuku.download_cvlac_profile(args.download_cvlac_profiles_use_raw, args.download_cvlac_profiles_max_tries)
 
     if args.download is not None:
         if args.download_collection is None:

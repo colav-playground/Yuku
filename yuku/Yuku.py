@@ -42,8 +42,9 @@ class Yuku:
         """
         blockquotes = soup.find_all('blockquote')
         text_private = 'La información de este currículo no está disponible por solicitud del investigador'
-        if text_private == blockquotes[1].text:
-            return True
+        for i in blockquotes:
+            if text_private == i.text:
+                return True
         return False
 
     def download_cvlac_data(self, dataset_id: str):

@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 import time
 import urllib3
 import sys
+from io import StringIO
 
 
 class Yuku:
@@ -41,21 +42,21 @@ class Yuku:
         """
         blockquotes = soup.find_all('blockquote')
         text_private = 'La información de este currículo no está disponible por solicitud del investigador'
-        if text_private == blockquotes[1].text:
-            return True
+        for i in blockquotes:
+            if text_private == i.text:
+                return True
         return False
 
-    def download_cvlac(self, dataset_id: str):
+    def download_cvlac_data(self, dataset_id: str):
         """
         Method to download cvlav information.
-        This can take long time, but if something goes wrong we support checkpoint.
+        Unfortunately we dont have support for checkpoint in this method.
 
         Parameters:
         ------------
         dataset_id:str
             id for dataset in socrata ex: bqtm-4y2h
         """
-        scienti_url = 'https://scienti.minciencias.gov.co/cvlac/visualizador/generarCurriculoCv.do?cod_rh='
         if "cvlac_dataset_info" in self.db.list_collection_names():
             print("WARNING: cvlac_dataset_info already in the database, it wont be downloaded again, drop the database if you want start over.")
         else:
@@ -68,45 +69,45 @@ class Yuku:
             data = self.client.get_all(dataset_id)
             data = list(data)
             self.db["cvlac_data"].insert_many(data)
-        cod_rh_data = self.db["cvlac_data"].distinct("id_persona_pr")
-        cod_rh_stage = self.db["cvlac_stage"].distinct("id_persona_pr")
-        cod_rh_stage_priv = self.db["cvlac_stage_private"].distinct(
-            "id_persona_pr")
-        cod_rh_stage_empty = self.db["cvlac_stage_empty"].distinct(
-            "id_persona_pr")
 
-        # computing the remaining ids for scrapping
-        cod_rh = set(cod_rh_data) - set(cod_rh_stage) - \
-            set(cod_rh_stage_priv) - set(cod_rh_stage_empty)
-        cod_rh = list(cod_rh)
-        print(f"INFO: found {len(cod_rh_data)} records in data\n      found {len(cod_rh_stage)} in stage\n      found {len(cod_rh)} remain records to download.")
-
-        counter = 0
-        count = len(cod_rh)
-        for cvlac in cod_rh:
-            if counter % 10 == 0:
-                print(f"INFO: Downloaded {counter} of {count}")
+    def process_cvlac_profile(self, cvlac, scienti_url, counter, count, use_raw, max_tries=1):
+        for t in range(max_tries):
             url = f'{scienti_url}{cvlac}'
+            if t > 0:
+                print(f"INFO: retrying {t} {url} ")
+            if counter % 10 == 0:
+                if use_raw:
+                    print(f"INFO: Parsed {counter} of {count} from raw")
+                else:
+                    print(f"INFO: Downloaded {counter} of {count}")
+            if use_raw:
+                r = self.db["cvlac_stage_raw"].find_one({"_id": cvlac})
+                if r is None:
+                    print(f"WARNING: not found id {cvlac}  in raw collection ")
+                    continue
+                else:
+                    html = r['html']
+            else:
+                try:
+                    r = requests.get(url, verify=False)
+                    html = r.text
+                except Exception as e:
+                    print(e, file=sys.stderr)
+                    self.db["cvlac_stage_error"].insert_one(
+                        {"url": url, "id_persona_pr": cvlac, "status_code": r.status_code, "html": html, "exception": str(e)})
+                    continue
 
-            try:
-                r = requests.get(url, verify=False)
-            except Exception as e:
-                print(e, file=sys.stderr)
-                self.db["cvlac_stage_error"].insert_one(
-                    {"url": url, "status_code": r.status_code, "html": r.text, "exception": str(e)})
+                if r.status_code != 200:
+                    print(
+                        f"Error processing id {cvlac}  with url = {url} status code = {r.status_code} ")
+                    self.db["cvlac_stage_error"].insert_one(
+                        {"url": url, "id_persona_pr": cvlac, "status_code": r.status_code, "html": html})
+                    continue
+
+            if not html:
                 continue
 
-            if r.status_code != 200:
-                print(
-                    f"Error processing id {cvlac}  with url = {url} status code = {r.status_code} ")
-                self.db["cvlac_stage_error"].insert_one(
-                    {"url": url, "status_code": r.status_code, "html": r.text})
-                continue
-
-            if not r.text:
-                continue
-
-            soup = BeautifulSoup(r.text, 'lxml')  # Parse the HTML as a string
+            soup = BeautifulSoup(html, 'lxml')  # Parse the HTML as a string
 
             reg = {'id_persona_pr': cvlac, "url": url}
             record = {}
@@ -122,16 +123,16 @@ class Yuku:
                             f"WARNING: found empty id {cvlac}  with url = {url} ")
                         self.db["cvlac_stage_empty"].insert_one(reg)
                         continue
-                    record['datos_generales'] = pd.read_html(table_tag.decode())[
+                    record['datos_generales'] = pd.read_html(StringIO(table_tag.decode()))[
                         0].to_dict(orient='records')
             except Exception as e:
                 print(f"Error processing id {cvlac}  with url = {url} ")
                 print("=" * 20)
-                print(r.text)
+                print(html)
                 print("=" * 20)
-                print(e, file=sys.stderr)
+                print(e)
                 self.db["cvlac_stage_error"].insert_one(
-                    {"url": url, "status_code": r.status_code, "html": r.text, "exception": str(e)})
+                    {"url": url, "id_persona_pr": cvlac, "status_code": r.status_code, "html": html, "exception": str(e)})
                 continue
             # Datos Generales (Extracting data if not empty)
             a_tag = soup.find('a', {'name': 'datos_generales'})
@@ -139,7 +140,7 @@ class Yuku:
             reg['datos_generales'] = {}
             reg['datos_generales']['Nombre'] = ''
 
-            record = pd.read_html(table_tag.decode())[
+            record = pd.read_html(StringIO(table_tag.decode()))[
                 0].to_dict(orient='records')
 
             for d in record:
@@ -154,32 +155,32 @@ class Yuku:
                         f"WARNING: found private id {cvlac}  with url = {url} ")
                     self.db["cvlac_stage_private"].insert_one(reg)
                     self.db["cvlac_stage_raw"].insert_one(
-                        {"_id": cvlac, "html": r.text})
+                        {"_id": cvlac, "html": html})
                     time.sleep(self.delay)
                     counter += 1
+                    return True
                     continue
             except Exception as e:
                 print(f"Error processing id {cvlac}  with url = {url} ")
                 print(e, file=sys.stderr)
                 self.db["cvlac_stage_error"].insert_one(
-                    {"url": url, "status_code": r.status_code, "html": r.text, "exception": str(e)})
+                    {"url": url, "id_persona_pr": cvlac, "status_code": r.status_code, "html": html, "exception": str(e)})
                 continue
             try:
                 # Redes
-                a_tag = soup.find('a', {'name': 'redes_identificadoes'})
-                table_tag = a_tag.find_next('table')
-                record = table_tag.find_all('a')
-                reg['redes_identificadoes'] = {}
+                a_tag = soup.find(
+                    'a', {'name': 'redes_identificadores'}).parent
+                table_tag = a_tag.find('table')
+                reg['redes_identificadores'] = {}
 
                 if table_tag is not None:
                     record = table_tag.find_all('a')
                     for link in record:
-                        reg['redes_identificadoes'][link.text] = link['href']
+                        reg['redes_identificadores'][link.text] = link['href']
 
                 # Identificadores
-                a_tag = soup.find('a', {'name': 'red_identificadores'})
-                table_tag = a_tag.find_next('table')
-                record = table_tag.find_all('a')
+                a_tag = soup.find('a', {'name': 'red_identificadores'}).parent
+                table_tag = a_tag.find('table')
 
                 reg['red_identificadores'] = {}
                 if table_tag is not None:
@@ -188,28 +189,106 @@ class Yuku:
                         reg['red_identificadores'][link.text] = link['href']
 
                 # Formación académica
-                a_tag = soup.find('a', {'name': 'formacion_acad'})
-                table_tag = a_tag.find_next('table')
-                record = table_tag.find_all('td')
+                a_tag = soup.find('a', {'name': 'formacion_acad'}).parent
+                table_tag = a_tag.find('table')
                 reg['formacion_acad'] = {}
                 if table_tag is not None:
                     record = table_tag.find_all('td')
-
                     for tag in record:
                         b_title = tag.find_all('b')
                         if len(b_title) > 0:
                             reg['formacion_acad'][b_title[0].text] = tag.text.split(
                                 '\r\n')
-                    self.db["cvlac_stage"].insert_one(reg)
+
+                # Experiencia laboral
+                a_tag = soup.find('a', {'name': 'experiencia'}).parent
+                table_tag = a_tag.find('table')
+                reg['experiencia'] = {}
+                if table_tag is not None:
+                    record = table_tag.find_all('td')
+                    for tag in record:
+                        b_title = tag.find_all('b')
+                        if len(b_title) > 0:
+                            reg['experiencia'][b_title[0].text] = {}
+
+                            data0 = tag.text.replace('\xa0', ' ').split(
+                                'Actividades de administración')
+                            reg['experiencia'][b_title[0].text]["General"] = data0[0].split(
+                                "\r\n")
+                            if len(data0) > 1:
+                                data1 = data0[1].split(
+                                    'Actividades de docencia')
+                                reg['experiencia'][b_title[0].text]['Actividades de administración'] = data1[0].split(
+                                    "\r\n")
+                                if len(data1) > 1:
+                                    data2 = data1[1].split(
+                                        'Actividades de investigación')
+                                    reg['experiencia'][b_title[0].text]['Actividades de docencia'] = data2[0].split(
+                                        "\r\n")
+                                    if len(data2) > 1:
+                                        reg['experiencia'][b_title[0].text]['Actividades de investigación'] = data2[1].split(
+                                            "\r\n")
+
+                self.db["cvlac_stage"].insert_one(reg)
+                if use_raw is False:
                     self.db["cvlac_stage_raw"].insert_one(
-                        {"_id": cvlac, "html": r.text})
+                        {"_id": cvlac, "html": html})
             except Exception as e:
                 print(f"Error processing id {cvlac}  with url = {url} ")
                 print(e, file=sys.stderr)
-                self.db["cvlac_stage_error"].insert_one(
-                    {"url": url, "status_code": r.status_code, "html": r.text, "exception": str(e)})
-            time.sleep(self.delay)
-            counter += 1
+                if use_raw:
+                    self.db["cvlac_stage_error"].insert_one(
+                        {"url": url, "id_persona_pr": cvlac, "status_code": "from raw", "html": html, "exception": str(e)})
+                else:
+                    self.db["cvlac_stage_error"].insert_one(
+                        {"url": url, "id_persona_pr": cvlac, "status_code": r.status_code, "html": html, "exception": str(e)})
+                return False
+            if use_raw is False:
+                time.sleep(self.delay)
+            return True
+
+        return False  # if max_tries is reached then it fails
+
+    def download_cvlac_profile(self, use_raw: bool = False, max_tries: int = 1):
+        """
+        Method to download cvlav profile information.
+        This can take long time, but if something goes wrong we support checkpoint.
+
+        Parameters:
+        ------------
+        use_raw:bool
+            process data from raw html collection (previously dowloaded), default False
+        """
+        scienti_url = 'https://scienti.minciencias.gov.co/cvlac/visualizador/generarCurriculoCv.do?cod_rh='
+        if "gruplac_production_data" not in self.db.list_collection_names():
+            print("ERROR: gruplac_production_data not in the database, please download gruplac_production_data first https://github.com/colav/Yuku?tab=readme-ov-file#download-gruplac-groups-data")
+
+        if "cvlac_data" not in self.db.list_collection_names():
+            print("ERROR: cvlac_data not in the database, please download cvlac_data frist https://github.com/colav/yuku?tab=readme-ov-file#download-cvlac-data")
+            return
+        cod_rh_data_grup = self.db["gruplac_production_data"].distinct(
+            "id_persona_pd")  # taking cod_rh from gruplac
+        cod_rh_data_cvlac = self.db["cvlac_data"].distinct(
+            "id_persona_pr")  # taking cod_rh from cvlac
+        cod_rh_data = set(cod_rh_data_grup).union(set(cod_rh_data_cvlac))
+        cod_rh_data = list(cod_rh_data)
+        cod_rh_stage = self.db["cvlac_stage"].distinct("id_persona_pr")
+        cod_rh_stage_priv = self.db["cvlac_stage_private"].distinct(
+            "id_persona_pr")
+        cod_rh_stage_empty = self.db["cvlac_stage_empty"].distinct(
+            "id_persona_pr")
+
+        # computing the remaining ids for scrapping
+        cod_rh = set(cod_rh_data) - set(cod_rh_stage) - \
+            set(cod_rh_stage_priv) - set(cod_rh_stage_empty)
+        cod_rh = list(cod_rh)
+        print(f"INFO: found {len(cod_rh_data)} records in cvlac_data and gruplac_production_data and \n      found {len(cod_rh_stage)} in stage\n      found {len(cod_rh)} remain records to download.")
+
+        counter = 0
+        count = len(cod_rh)
+        for cvlac in cod_rh:
+            if self.process_cvlac_profile(cvlac, scienti_url, counter, count, use_raw, max_tries):
+                counter += 1
         print(f"INFO: Downloaded {counter} of {count}")
 
     def download_gruplac_production(self, dataset_id: str):

@@ -81,10 +81,8 @@ def main():
         # Dependent packages (distributions)
         install_requires=[
             'pymongo>=3.10.1',
-            'numpy==1.21.0; python_version=="3.8"',
-            'numpy>=1.21.0; python_version>"3.8"',
-            'pandas==2.0.2; python_version=="3.8"',
-            'pandas>=2.0.2; python_version>"3.8"',
+            'numpy',
+            'pandas',
             'requests>=2.22.0',
             'sodapy',
             'beautifulsoup4',

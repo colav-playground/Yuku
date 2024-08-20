@@ -94,7 +94,7 @@ class Yuku:
                 except Exception as e:
                     print(e, file=sys.stderr)
                     self.db["cvlac_stage_error"].insert_one(
-                        {"url": url, "id_persona_pr": cvlac, "status_code": 'unkown', "html": html, "exception": str(e)})
+                        {"url": url, "id_persona_pr": cvlac, "status_code": 'unkown', "html": '', "exception": str(e)})
                     continue
 
                 if r.status_code != 200:
